@@ -13,6 +13,10 @@ permissions:
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
+    env:
+      VITE_EMAILJS_PUBLIC_KEY: ${{ vars.VITE_EMAILJS_PUBLIC_KEY || secrets.VITE_EMAILJS_PUBLIC_KEY }}
+      VITE_EMAILJS_SERVICE_ID: ${{ vars.VITE_EMAILJS_SERVICE_ID || secrets.VITE_EMAILJS_SERVICE_ID }}
+      VITE_EMAILJS_TEMPLATE_ID: ${{ vars.VITE_EMAILJS_TEMPLATE_ID || secrets.VITE_EMAILJS_TEMPLATE_ID }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -25,6 +29,21 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Validate EmailJS build variables
+        run: |
+          missing=0
+
+          for key in VITE_EMAILJS_PUBLIC_KEY VITE_EMAILJS_SERVICE_ID VITE_EMAILJS_TEMPLATE_ID; do
+            if [ -z "${!key}" ]; then
+              echo "::error::Missing $key. Add it as a GitHub repository variable or secret before deploying."
+              missing=1
+            fi
+          done
+
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
 
       - name: Build
         run: npm run build
