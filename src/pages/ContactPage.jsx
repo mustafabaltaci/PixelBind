@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Bug, Lightbulb, Mail, MessageSquare, Send } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 
@@ -11,11 +11,58 @@ const initialFormState = {
   message: ''
 };
 
-// Read EmailJS settings from Vite env variables to keep secrets out of source control.
-const getEmailJsConfig = () => ({
+const RECAPTCHA_SCRIPT_ID = 'google-recaptcha-api';
+let recaptchaScriptPromise;
+
+const loadRecaptchaApi = () => {
+  if (typeof window === 'undefined') {
+    return Promise.reject(new Error('reCAPTCHA can only load in the browser'));
+  }
+
+  if (window.grecaptcha?.render) {
+    return Promise.resolve(window.grecaptcha);
+  }
+
+  if (recaptchaScriptPromise) {
+    return recaptchaScriptPromise;
+  }
+
+  recaptchaScriptPromise = new Promise((resolve, reject) => {
+    const resolveWhenReady = () => {
+      if (!window.grecaptcha?.ready) {
+        reject(new Error('reCAPTCHA failed to initialize'));
+        return;
+      }
+
+      window.grecaptcha.ready(() => resolve(window.grecaptcha));
+    };
+
+    const existingScript = document.getElementById(RECAPTCHA_SCRIPT_ID);
+    if (existingScript) {
+      existingScript.addEventListener('load', resolveWhenReady, { once: true });
+      existingScript.addEventListener('error', () => reject(new Error('Failed to load reCAPTCHA script')), { once: true });
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.id = RECAPTCHA_SCRIPT_ID;
+    script.src = 'https://www.google.com/recaptcha/api.js?render=explicit';
+    script.async = true;
+    script.defer = true;
+    script.onload = resolveWhenReady;
+    script.onerror = () => reject(new Error('Failed to load reCAPTCHA script'));
+    document.head.appendChild(script);
+  });
+
+  return recaptchaScriptPromise;
+};
+
+// Read contact form settings from Vite env variables to keep secrets out of source control.
+const getContactFormConfig = () => ({
   publicKey: import.meta.env.VITE_EMAILJS_PUBLIC_KEY,
   serviceId: import.meta.env.VITE_EMAILJS_SERVICE_ID,
-  templateId: import.meta.env.VITE_EMAILJS_TEMPLATE_ID
+  templateId: import.meta.env.VITE_EMAILJS_TEMPLATE_ID,
+  recaptchaSiteKey: import.meta.env.VITE_RECAPTCHA_SITE_KEY
 });
 
 export default function ContactPage({ onBack, contactEmail }) {
@@ -23,10 +70,13 @@ export default function ContactPage({ onBack, contactEmail }) {
   const [formData, setFormData] = useState(initialFormState);
   const [submitState, setSubmitState] = useState('idle');
   const [errorMessage, setErrorMessage] = useState('');
+  const [captchaToken, setCaptchaToken] = useState('');
+  const captchaContainerRef = useRef(null);
+  const captchaWidgetIdRef = useRef(null);
 
-  const emailJsConfig = getEmailJsConfig();
-  // Gate the form submit path until all required EmailJS values are present.
-  const hasEmailJsConfig = Object.values(emailJsConfig).every(Boolean);
+  const contactFormConfig = getContactFormConfig();
+  // Gate the form submit path until all required contact form values are present.
+  const hasContactFormConfig = Object.values(contactFormConfig).every(Boolean);
   const mailtoHref = `mailto:${contactEmail}?subject=${encodeURIComponent('PixelBind Feedback')}`;
   const categoryOptions = [
     {
@@ -54,15 +104,58 @@ export default function ContactPage({ onBack, contactEmail }) {
     }));
   };
 
+  const resetCaptcha = () => {
+    setCaptchaToken('');
+
+    if (captchaWidgetIdRef.current !== null && window.grecaptcha?.reset) {
+      window.grecaptcha.reset(captchaWidgetIdRef.current);
+    }
+  };
+
+  useEffect(() => {
+    if (!contactFormConfig.recaptchaSiteKey || !captchaContainerRef.current) {
+      return undefined;
+    }
+
+    let isActive = true;
+
+    loadRecaptchaApi()
+      .then((grecaptcha) => {
+        if (!isActive || captchaWidgetIdRef.current !== null || !captchaContainerRef.current) {
+          return;
+        }
+
+        captchaWidgetIdRef.current = grecaptcha.render(captchaContainerRef.current, {
+          sitekey: contactFormConfig.recaptchaSiteKey,
+          callback: (token) => setCaptchaToken(token),
+          'expired-callback': () => setCaptchaToken(''),
+          'error-callback': () => setCaptchaToken('')
+        });
+      })
+      .catch((error) => {
+        console.error('Failed to initialize reCAPTCHA:', error);
+      });
+
+    return () => {
+      isActive = false;
+    };
+  }, [contactFormConfig.recaptchaSiteKey]);
+
   const handleSubmit = async (event) => {
     event.preventDefault();
     setSubmitState('submitting');
     setErrorMessage('');
 
     // Surface setup problems immediately instead of issuing a failing network request.
-    if (!hasEmailJsConfig) {
+    if (!hasContactFormConfig) {
       setSubmitState('error');
       setErrorMessage(t('contactSetupMissing'));
+      return;
+    }
+
+    if (!captchaToken) {
+      setSubmitState('error');
+      setErrorMessage(t('contactCaptchaMissing'));
       return;
     }
 
@@ -74,9 +167,9 @@ export default function ContactPage({ onBack, contactEmail }) {
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
-          service_id: emailJsConfig.serviceId,
-          template_id: emailJsConfig.templateId,
-          user_id: emailJsConfig.publicKey,
+          service_id: contactFormConfig.serviceId,
+          template_id: contactFormConfig.templateId,
+          user_id: contactFormConfig.publicKey,
           template_params: {
             to_email: contactEmail,
             category: formData.category,
@@ -86,7 +179,8 @@ export default function ContactPage({ onBack, contactEmail }) {
             reply_to: formData.email,
             subject: formData.subject,
             message: formData.message,
-            app_name: t('title')
+            app_name: t('title'),
+            'g-recaptcha-response': captchaToken
           }
         })
       });
@@ -97,10 +191,12 @@ export default function ContactPage({ onBack, contactEmail }) {
 
       setFormData(initialFormState);
       setSubmitState('success');
+      resetCaptcha();
     } catch (error) {
       console.error('Failed to send contact form:', error);
       setSubmitState('error');
       setErrorMessage(t('contactErrorText'));
+      resetCaptcha();
     }
   };
 
@@ -164,7 +260,7 @@ export default function ContactPage({ onBack, contactEmail }) {
         </div>
       </div>
 
-      {!hasEmailJsConfig && (
+      {!hasContactFormConfig && (
         <div className="rounded-[2rem] border border-amber-500/20 bg-amber-500/10 px-6 py-5 text-amber-900 dark:text-amber-100 shadow-[inset_0_1px_1px_rgba(255,255,255,0.04)]">
           <p className="text-xs font-black uppercase tracking-[0.24em] text-amber-700 dark:text-amber-300">{t('contactSetupTitle')}</p>
           <p className="mt-2 text-sm font-bold leading-relaxed text-amber-800 dark:text-amber-100/90">{t('contactSetupBanner')}</p>
@@ -272,6 +368,15 @@ export default function ContactPage({ onBack, contactEmail }) {
             />
           </label>
 
+          <div className="space-y-3">
+            <span className="text-[11px] font-black uppercase tracking-[0.24em] text-gray-500 dark:text-gray-400">
+              {t('contactCaptchaLabel')}
+            </span>
+            <div className="rounded-[1.75rem] border border-slate-200/80 dark:border-white/10 bg-white/80 dark:bg-black/20 px-4 py-4 overflow-x-auto">
+              <div ref={captchaContainerRef} />
+            </div>
+          </div>
+
           {(submitState === 'success' || submitState === 'error') && (
             <div className={`rounded-[1.75rem] px-5 py-4 border ${
               submitState === 'success'
@@ -292,9 +397,9 @@ export default function ContactPage({ onBack, contactEmail }) {
           <div className="flex flex-col sm:flex-row gap-4">
             <button
               type="submit"
-              disabled={submitState === 'submitting'}
+              disabled={submitState === 'submitting' || !hasContactFormConfig}
               className={`inline-flex items-center justify-center gap-3 px-6 py-4 rounded-[1.5rem] font-black text-base transition-all ${
-                submitState === 'submitting'
+                submitState === 'submitting' || !hasContactFormConfig
                   ? 'bg-slate-200/80 dark:bg-black/20 text-gray-500 cursor-not-allowed'
                   : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-[0_20px_40px_rgba(79,70,229,0.25)]'
               }`}

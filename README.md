@@ -185,6 +185,7 @@ Create a local `.env` file based on `.env.example`:
 VITE_EMAILJS_PUBLIC_KEY=your_public_key
 VITE_EMAILJS_SERVICE_ID=service_xxxxxxx
 VITE_EMAILJS_TEMPLATE_ID=template_xxxxxxx
+VITE_RECAPTCHA_SITE_KEY=your_recaptcha_site_key
 ```
 
 If these values are missing, the contact page remains visible but form submission is disabled and the UI shows a setup warning.

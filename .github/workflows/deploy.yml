@@ -17,6 +17,7 @@ jobs:
       VITE_EMAILJS_PUBLIC_KEY: ${{ vars.VITE_EMAILJS_PUBLIC_KEY || secrets.VITE_EMAILJS_PUBLIC_KEY }}
       VITE_EMAILJS_SERVICE_ID: ${{ vars.VITE_EMAILJS_SERVICE_ID || secrets.VITE_EMAILJS_SERVICE_ID }}
       VITE_EMAILJS_TEMPLATE_ID: ${{ vars.VITE_EMAILJS_TEMPLATE_ID || secrets.VITE_EMAILJS_TEMPLATE_ID }}
+      VITE_RECAPTCHA_SITE_KEY: ${{ vars.VITE_RECAPTCHA_SITE_KEY || secrets.VITE_RECAPTCHA_SITE_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -34,7 +35,7 @@ jobs:
         run: |
           missing=0
 
-          for key in VITE_EMAILJS_PUBLIC_KEY VITE_EMAILJS_SERVICE_ID VITE_EMAILJS_TEMPLATE_ID; do
+          for key in VITE_EMAILJS_PUBLIC_KEY VITE_EMAILJS_SERVICE_ID VITE_EMAILJS_TEMPLATE_ID VITE_RECAPTCHA_SITE_KEY; do
             if [ -z "${!key}" ]; then
               echo "::error::Missing $key. Add it as a GitHub repository variable or secret before deploying."
               missing=1
