@@ -1,8 +1,8 @@
 # PixelBind
 
-PixelBind is a browser-based sprite sheet generator for pixel art workflows. It helps game developers clean sprite backgrounds, auto-trim assets, normalize them into grid cells, pack them into a single atlas, and export a Tiled-compatible `.tsx` descriptor without relying on a backend for the core image pipeline.
+PixelBind is a browser-based sprite sheet generator, texture packer, and sprite atlas tool for pixel art workflows. It helps game developers clean sprite backgrounds, auto-trim assets, normalize them into grid cells, pack them into a single atlas, and export a Tiled-compatible `.tsx` descriptor without relying on a backend for the core image pipeline.
 
-The application is built with React, Vite, Tailwind CSS, and the HTML5 Canvas API. Its primary goal is to turn raw sprite images into production-ready outputs quickly while keeping the processing experience local to the browser.
+The application is built with React, Vite, Tailwind CSS, and the HTML5 Canvas API. Its primary goal is to turn raw sprite images into production-ready sprite sheets quickly while keeping the processing experience local to the browser.
 
 ## What It Does
 

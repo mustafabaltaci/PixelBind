@@ -119,8 +119,7 @@ export const translations = {
     contactPrivacyEyebrow: "Reply expectations",
     contactPrivacyTitle: "Leave an email if you want a response.",
     contactPrivacyText: "Your email is used only so the message can be understood and answered. If you prefer not to be contacted, you can still use the direct email card instead.",
-    starOnGithub: "Star on GitHub",
-    craftedWith: "Crafted with"
+    starOnGithub: "Star on GitHub"
   },
   // Turkish mirrors the same keys so components can switch languages safely.
   tr: {
@@ -241,7 +240,6 @@ export const translations = {
     contactPrivacyEyebrow: "Geri dönüş beklentisi",
     contactPrivacyTitle: "Yanıt istiyorsanız e-posta bırakın.",
     contactPrivacyText: "E-posta adresiniz yalnızca mesajın anlaşılması ve gerekirse yanıt verilebilmesi için kullanılır. İletişim kurulmasını istemiyorsanız doğrudan e-posta kartını da kullanabilirsiniz.",
-    starOnGithub: "GitHub'da Yildiz Ver",
-    craftedWith: "Crafted with"
+    starOnGithub: "GitHub'da Yıldız Ver"
   }
 };

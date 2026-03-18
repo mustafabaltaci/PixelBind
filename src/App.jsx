@@ -7,7 +7,6 @@ import {
   Download, 
   Grid3X3, 
   CheckCircle2,
-  XCircle,
   HelpCircle,
   X,
   Image as ImageIcon,
@@ -34,7 +33,30 @@ import pixelBindLogo from './assets/PixelBind.png';
 const GRID_RESOLUTIONS = [16, 32, 48, 64];
 const CONTACT_EMAIL = 'baltacimustafa@outlook.com';
 const CONTACT_HASH = '#contact';
-const REPO_URL = 'https://github.com/mustafabaltaci/APL';
+const REPO_URL = 'https://github.com/mustafabaltaci/PixelBind';
+const PROMPTS_URL = 'https://script.google.com/macros/s/AKfycbxK6N5RGTE_rtCE5uMemIw03mH9ZiN8RvUFxN91uXxX6SvBKETW09WDZmlb0Cao8ZXn7w/exec';
+
+const createAssetId = () => globalThis.crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2, 11);
+const revokeObjectUrl = (url) => {
+  if (typeof url === 'string' && url.startsWith('blob:')) {
+    URL.revokeObjectURL(url);
+  }
+};
+
+const revokeAssetPreviews = (assetList) => {
+  assetList.forEach((asset) => revokeObjectUrl(asset.preview));
+};
+
+const canvasToBlob = (canvas, type) => new Promise((resolve, reject) => {
+  canvas.toBlob((blob) => {
+    if (!blob) {
+      reject(new Error('Canvas export failed'));
+      return;
+    }
+
+    resolve(blob);
+  }, type);
+});
 
 // Mirror the hash-based view state so the contact page can be linked directly.
 const getActiveViewFromHash = () => {
@@ -63,28 +85,77 @@ export default function App() {
   const [isLoadingPrompts, setIsLoadingPrompts] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
   const [showPromptGuide, setShowPromptGuide] = useState(false);
+  const assetsRef = React.useRef(assets);
+  const previewUrlRef = React.useRef(null);
+  const copyResetTimeoutRef = React.useRef(null);
+
+  React.useEffect(() => {
+    assetsRef.current = assets;
+  }, [assets]);
+
+  React.useEffect(() => {
+    previewUrlRef.current = previewData?.previewUrl ?? null;
+  }, [previewData]);
 
   React.useEffect(() => {
     // Lazy-load prompt templates only when the modal is opened for the first time.
-    if (isPromptModalOpen && promptsData.length === 0) {
-      setIsLoadingPrompts(true);
-      fetch('https://script.google.com/macros/s/AKfycbxK6N5RGTE_rtCE5uMemIw03mH9ZiN8RvUFxN91uXxX6SvBKETW09WDZmlb0Cao8ZXn7w/exec')
-        .then(res => res.json())
-        .then(data => {
-          setPromptsData(data);
-          setIsLoadingPrompts(false);
-        })
-        .catch(err => {
-          console.error("Failed to fetch prompts:", err);
-          setIsLoadingPrompts(false);
-        });
+    if (!isPromptModalOpen || promptsData.length > 0) {
+      return undefined;
     }
+
+    const controller = new AbortController();
+    setIsLoadingPrompts(true);
+
+    fetch(PROMPTS_URL, { signal: controller.signal })
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`Prompt request failed with ${response.status}`);
+        }
+
+        return response.json();
+      })
+      .then((data) => {
+        setPromptsData(Array.isArray(data) ? data : []);
+      })
+      .catch((error) => {
+        if (error.name !== 'AbortError') {
+          console.error('Failed to fetch prompts:', error);
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setIsLoadingPrompts(false);
+        }
+      });
+
+    return () => controller.abort();
   }, [isPromptModalOpen, promptsData.length]);
 
-  const handleCopyPrompt = (text) => {
-    navigator.clipboard.writeText(text);
-    setIsCopied(true);
-    setTimeout(() => setIsCopied(false), 2000);
+  React.useEffect(() => () => {
+    revokeAssetPreviews(assetsRef.current);
+    revokeObjectUrl(previewUrlRef.current);
+
+    if (copyResetTimeoutRef.current) {
+      window.clearTimeout(copyResetTimeoutRef.current);
+    }
+  }, []);
+
+  const handleCopyPrompt = async (text) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setIsCopied(true);
+
+      if (copyResetTimeoutRef.current) {
+        window.clearTimeout(copyResetTimeoutRef.current);
+      }
+
+      copyResetTimeoutRef.current = window.setTimeout(() => {
+        setIsCopied(false);
+        copyResetTimeoutRef.current = null;
+      }, 2000);
+    } catch (error) {
+      console.error('Failed to copy prompt:', error);
+    }
   };
 
   React.useEffect(() => {
@@ -100,11 +171,11 @@ export default function App() {
   const openContactPage = () => {
     // Close generator-specific overlays before switching to the contact view.
     setIsModalOpen(false);
-    setIsPreviewOpen(false);
+    closePreview();
     setIsPromptModalOpen(false);
     setSelectedPrompt(null);
     setActiveView('contact');
-    window.location.hash = 'contact';
+    window.location.hash = CONTACT_HASH;
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
@@ -139,9 +210,9 @@ export default function App() {
             const blob = await res.blob();
             const file = new File([blob], asset.fileName, { type: asset.fileType });
             return {
-              id: asset.id || Math.random().toString(36).substr(2, 9),
+              id: asset.id || createAssetId(),
               customName: asset.customName || asset.fileName,
-              file: file,
+              file,
               preview: URL.createObjectURL(file),
               gridSpan: asset.gridSpan || { w: 1, h: 1 },
               padding: asset.padding || { x: 0, y: 0 },
@@ -150,8 +221,11 @@ export default function App() {
               cleanInnerWhites: asset.cleanInnerWhites || false
             };
           }));
-          
-          setAssets(restoredAssets);
+
+          setAssets((prev) => {
+            revokeAssetPreviews(prev);
+            return restoredAssets;
+          });
         } catch (error) {
           console.error("Failed to load project:", error);
           alert(t('invalidProject'));
@@ -168,7 +242,7 @@ export default function App() {
       const customName = lastDotIndex !== -1 ? file.name.substring(0, lastDotIndex) : file.name;
       
       return {
-        id: Math.random().toString(36).substr(2, 9),
+        id: createAssetId(),
         file,
         customName,
         preview: URL.createObjectURL(file),
@@ -195,13 +269,20 @@ export default function App() {
 
   // Small state updaters keep the JSX readable when editing per-asset options.
   const removeAsset = (id) => {
-    setAssets(prev => prev.filter(a => a.id !== id));
+    setAssets((prev) => {
+      const assetToRemove = prev.find((asset) => asset.id === id);
+      revokeObjectUrl(assetToRemove?.preview);
+      return prev.filter((asset) => asset.id !== id);
+    });
   };
 
   const handleClearAll = () => {
     if (assets.length === 0) return;
     if (window.confirm(t('confirmClear'))) {
-      setAssets([]);
+      setAssets((prev) => {
+        revokeAssetPreviews(prev);
+        return [];
+      });
     }
   };
 
@@ -226,11 +307,22 @@ export default function App() {
   // Trigger a browser download without leaving the page or needing a backend.
   const downloadFile = (blob, fileName) => {
     const link = document.createElement('a');
+    const objectUrl = URL.createObjectURL(blob);
     link.download = fileName;
-    link.href = URL.createObjectURL(blob);
+    link.href = objectUrl;
+    document.body.appendChild(link);
     link.click();
-    URL.revokeObjectURL(link.href);
+    link.remove();
+    revokeObjectUrl(objectUrl);
   };
+
+  const closePreview = useCallback(() => {
+    setIsPreviewOpen(false);
+    setPreviewData((prev) => {
+      revokeObjectUrl(prev?.previewUrl);
+      return null;
+    });
+  }, []);
 
   const handleSaveProject = async () => {
     try {
@@ -295,8 +387,7 @@ export default function App() {
       downloadFile(previewData.outlinesImage, `${packageName}_outlines.png`);
     }
 
-    setIsPreviewOpen(false);
-    setPreviewData(null);
+    closePreview();
   };
 
   const handleGenerate = async () => {
@@ -313,8 +404,8 @@ export default function App() {
 
     try {
       const { canvas, packing } = await generateSpriteSheet(assets, { w: activeGridW, h: activeGridH }, { generateOutlines });
-      
-      const mainImageBlob = await new Promise(resolve => canvas.toBlob(resolve));
+
+      const mainImageBlob = await canvasToBlob(canvas);
       
       // TSX metadata lets Tiled consume the exported sheet without extra manual setup.
       const tileCount = packing.placements.length;
@@ -324,14 +415,17 @@ export default function App() {
       let outlinesImageBlob = null;
       if (generateOutlines) {
         const outlineCanvas = generateHoverOutlines(canvas);
-        outlinesImageBlob = await new Promise(resolve => outlineCanvas.toBlob(resolve));
+        outlinesImageBlob = await canvasToBlob(outlineCanvas);
       }
 
-      setPreviewData({
-        mainImage: mainImageBlob,
-        outlinesImage: outlinesImageBlob,
-        tsxContent,
-        previewUrl: URL.createObjectURL(mainImageBlob)
+      setPreviewData((prev) => {
+        revokeObjectUrl(prev?.previewUrl);
+        return {
+          mainImage: mainImageBlob,
+          outlinesImage: outlinesImageBlob,
+          tsxContent,
+          previewUrl: URL.createObjectURL(mainImageBlob)
+        };
       });
       setIsPreviewOpen(true);
 
@@ -752,7 +846,7 @@ export default function App() {
       {/* Liquid Glass Preview Modal */}
       {activeView === 'generator' && isPreviewOpen && previewData && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 overflow-hidden">
-          <div className="absolute inset-0 bg-gray-950/80 backdrop-blur-2xl animate-in fade-in duration-700" onClick={() => setIsPreviewOpen(false)} />
+          <div className="absolute inset-0 bg-gray-950/80 backdrop-blur-2xl animate-in fade-in duration-700" onClick={closePreview} />
           <div className={`relative rounded-[3.5rem] w-full max-w-4xl overflow-hidden shadow-[0_50px_100px_-20px_rgba(0,0,0,0.8)] animate-in zoom-in-95 slide-in-from-bottom-20 duration-700 ${liquidGlassClass}`}>
             <div className="flex items-center justify-between p-10 border-b border-slate-200/80 dark:border-white/10 bg-white/70 dark:bg-white/5">
               <div className="flex items-center gap-4">
@@ -761,7 +855,7 @@ export default function App() {
                 </div>
                 <h2 className="text-3xl font-black text-gray-900 dark:text-white tracking-tight">{t('previewTitle')}</h2>
               </div>
-              <button onClick={() => setIsPreviewOpen(false)} className="p-4 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 rounded-2xl transition-all"><X className="w-8 h-8" /></button>
+              <button onClick={closePreview} className="p-4 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 rounded-2xl transition-all"><X className="w-8 h-8" /></button>
             </div>
             
             <div className="p-10 flex flex-col items-center gap-8 overflow-hidden">
@@ -776,7 +870,7 @@ export default function App() {
               
               <div className="flex gap-4 w-full">
                 <button 
-                  onClick={() => setIsPreviewOpen(false)} 
+                  onClick={closePreview} 
                   className="flex-1 px-8 py-5 bg-white/70 dark:bg-white/5 hover:bg-white dark:hover:bg-white/10 text-gray-900 dark:text-white font-black rounded-2xl transition-all border border-slate-200/80 dark:border-white/10"
                 >
                   {t('cancel')}
@@ -804,9 +898,7 @@ export default function App() {
                 <div className="p-2.5 bg-purple-600 rounded-2xl shadow-xl ring-1 ring-white/20">
                   <Sparkles className="w-6 h-6 text-white" />
                 </div>
-                <h2 className="text-2xl font-black text-gray-900 dark:text-white tracking-tight">
-                  {selectedPrompt ? t('promptIdeas') : t('promptIdeas')}
-                </h2>
+                <h2 className="text-2xl font-black text-gray-900 dark:text-white tracking-tight">{t('promptIdeas')}</h2>
               </div>
               <div className="flex items-center gap-2">
                 {!selectedPrompt && (
@@ -924,7 +1016,7 @@ export default function App() {
                   <div className="grid gap-4">
                     {promptsData.map((item, idx) => (
                       <button
-                        key={idx}
+                        key={`${item.title}-${idx}`}
                         onClick={() => setSelectedPrompt(item)}
                         className="flex items-center justify-between p-5 bg-white/80 dark:bg-white/5 hover:bg-purple-500/10 border border-slate-200/80 dark:border-white/10 hover:border-purple-500/30 rounded-3xl transition-all group text-left"
                       >
@@ -962,38 +1054,9 @@ export default function App() {
               {t('starOnGithub')}
             </a>
           </div>
-          <div className="inline-flex flex-wrap items-center justify-center gap-4 text-[10px] text-gray-500 font-black tracking-[0.4em] uppercase">
-            <span className="drop-shadow-sm">{t('developedBy')}</span>
-            <span className="w-1.5 h-1.5 bg-gray-700 rounded-full shadow-inner" />
-            <div className="flex items-center gap-2 text-indigo-400 drop-shadow-[0_0_8px_rgba(129,140,248,0.4)]">
-              <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M12,2L14.5,9.5L22,12L14.5,14.5L12,22L9.5,14.5L2,12L9.5,9.5L12,2Z" /></svg>
-              <span className="tracking-[0.5em]">Gemini</span>
-            </div>
-            <span className="w-1.5 h-1.5 bg-gray-700 rounded-full shadow-inner" />
-            <div className="flex items-center gap-2 text-cyan-600 dark:text-cyan-300 drop-shadow-[0_0_8px_rgba(34,211,238,0.25)]">
-              <span className="tracking-[0.4em]">{t('craftedWith')}</span>
-              <span className="tracking-[0.5em]">Codex</span>
-            </div>
-          </div>
+          <p className="text-[10px] text-gray-500 font-black tracking-[0.4em] uppercase drop-shadow-sm">{t('developedBy')}</p>
         </div>
       </footer>
-
-      <style>{`
-        .image-pixelated { image-rendering: pixelated; image-rendering: crisp-edges; }
-        .custom-scrollbar::-webkit-scrollbar { width: 8px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); border-radius: 10px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; border: 2px solid transparent; background-clip: content-box; }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); border-radius: 10px; border: 2px solid transparent; background-clip: content-box; }
-        .bg-checkerboard {
-          background-image: linear-gradient(45deg, #1a1a1a 25%, transparent 25%), 
-            linear-gradient(-45deg, #1a1a1a 25%, transparent 25%), 
-            linear-gradient(45deg, transparent 75%, #1a1a1a 75%), 
-            linear-gradient(-45deg, transparent 75%, #1a1a1a 75%);
-          background-size: 20px 20px;
-          background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
-          background-color: #262626;
-        }
-      `}</style>
     </div>
   );
 }

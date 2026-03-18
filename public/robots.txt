@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://mustafabaltaci.github.io/PixelBind/sitemap.xml

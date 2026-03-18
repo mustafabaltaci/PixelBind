@@ -1,10 +1,17 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 
 const ThemeContext = createContext();
+const getStoredTheme = () => {
+  if (typeof window === 'undefined') {
+    return 'light';
+  }
+
+  return window.localStorage.getItem('theme') === 'dark' ? 'dark' : 'light';
+};
 
 export const ThemeProvider = ({ children }) => {
   // Restore the previous theme before the first paint when possible.
-  const [theme, setTheme] = useState(localStorage.getItem('theme') || 'light');
+  const [theme, setTheme] = useState(getStoredTheme);
 
   useEffect(() => {
     const root = window.document.documentElement;
@@ -14,7 +21,7 @@ export const ThemeProvider = ({ children }) => {
     } else {
       root.classList.remove('dark');
     }
-    localStorage.setItem('theme', theme);
+    window.localStorage.setItem('theme', theme);
   }, [theme]);
 
   const toggleTheme = () => {
