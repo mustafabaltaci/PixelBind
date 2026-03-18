@@ -1,0 +1,999 @@
+import React, { useState, useCallback } from 'react';
+import { useDropzone } from 'react-dropzone';
+import { 
+  Upload, 
+  Trash2, 
+  Settings2, 
+  Download, 
+  Grid3X3, 
+  CheckCircle2,
+  XCircle,
+  HelpCircle,
+  X,
+  Image as ImageIcon,
+  Save,
+  FolderOpen,
+  Sparkles,
+  ChevronLeft,
+  Copy,
+  Check,
+  Info,
+  Lightbulb,
+  ListOrdered,
+  AlertTriangle,
+  Mail,
+  Github,
+  Star
+} from 'lucide-react';
+import { generateHoverOutlines, generateSpriteSheet } from './utils/canvasProcessor';
+import { useLanguage } from './context/LanguageContext';
+import { ThemeToggle, LanguageToggle } from './components/Toggles';
+import ContactPage from './pages/ContactPage';
+import pixelBindLogo from './assets/PixelBind.png';
+
+const GRID_RESOLUTIONS = [16, 32, 48, 64];
+const CONTACT_EMAIL = 'baltacimustafa@outlook.com';
+const CONTACT_HASH = '#contact';
+const REPO_URL = 'https://github.com/mustafabaltaci/APL';
+
+// Mirror the hash-based view state so the contact page can be linked directly.
+const getActiveViewFromHash = () => {
+  if (typeof window === 'undefined') return 'generator';
+  return window.location.hash === CONTACT_HASH ? 'contact' : 'generator';
+};
+
+export default function App() {
+  const { t } = useLanguage();
+  const [activeView, setActiveView] = useState(getActiveViewFromHash);
+  const [packageName, setPackageName] = useState('MySpriteSheet');
+  const [baseResolution, setBaseResolution] = useState(32);
+  const [customGridW, setCustomGridW] = useState(64);
+  const [customGridH, setCustomGridH] = useState(64);
+  const [generateOutlines, setGenerateOutlines] = useState(false);
+  const [assets, setAssets] = useState([]);
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [previewData, setPreviewData] = useState(null);
+
+  // Prompt helper UI state lives here because the modal is driven from the top-level layout.
+  const [isPromptModalOpen, setIsPromptModalOpen] = useState(false);
+  const [promptsData, setPromptsData] = useState([]);
+  const [selectedPrompt, setSelectedPrompt] = useState(null);
+  const [isLoadingPrompts, setIsLoadingPrompts] = useState(false);
+  const [isCopied, setIsCopied] = useState(false);
+  const [showPromptGuide, setShowPromptGuide] = useState(false);
+
+  React.useEffect(() => {
+    // Lazy-load prompt templates only when the modal is opened for the first time.
+    if (isPromptModalOpen && promptsData.length === 0) {
+      setIsLoadingPrompts(true);
+      fetch('https://script.google.com/macros/s/AKfycbxK6N5RGTE_rtCE5uMemIw03mH9ZiN8RvUFxN91uXxX6SvBKETW09WDZmlb0Cao8ZXn7w/exec')
+        .then(res => res.json())
+        .then(data => {
+          setPromptsData(data);
+          setIsLoadingPrompts(false);
+        })
+        .catch(err => {
+          console.error("Failed to fetch prompts:", err);
+          setIsLoadingPrompts(false);
+        });
+    }
+  }, [isPromptModalOpen, promptsData.length]);
+
+  const handleCopyPrompt = (text) => {
+    navigator.clipboard.writeText(text);
+    setIsCopied(true);
+    setTimeout(() => setIsCopied(false), 2000);
+  };
+
+  React.useEffect(() => {
+    // Keep browser navigation and direct links aligned with the rendered view.
+    const syncViewFromHash = () => {
+      setActiveView(getActiveViewFromHash());
+    };
+
+    window.addEventListener('hashchange', syncViewFromHash);
+    return () => window.removeEventListener('hashchange', syncViewFromHash);
+  }, []);
+
+  const openContactPage = () => {
+    // Close generator-specific overlays before switching to the contact view.
+    setIsModalOpen(false);
+    setIsPreviewOpen(false);
+    setIsPromptModalOpen(false);
+    setSelectedPrompt(null);
+    setActiveView('contact');
+    window.location.hash = 'contact';
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const openGeneratorPage = () => {
+    setActiveView('generator');
+    // Remove the contact hash so refreshes land back on the generator.
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const onDrop = useCallback(async (acceptedFiles) => {
+    // Support both image uploads and saved workspace files in the same drop target.
+    const projectFile = acceptedFiles.find(file => file.name.endsWith('.spack') || file.name.endsWith('.json'));
+    if (projectFile) {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          const data = JSON.parse(e.target.result);
+          if (!data || !data.assets || !data.packageName) {
+            throw new Error('Invalid project structure');
+          }
+          
+          setPackageName(data.packageName);
+          if (data.baseResolution) setBaseResolution(data.baseResolution);
+          if (data.customGridW) setCustomGridW(data.customGridW);
+          if (data.customGridH) setCustomGridH(data.customGridH);
+          if (data.generateOutlines !== undefined) setGenerateOutlines(data.generateOutlines);
+          
+          // Rehydrate the serialized asset payload back into File objects and blob URLs.
+          const restoredAssets = await Promise.all(data.assets.map(async (asset) => {
+            const res = await fetch(asset.base64Data);
+            const blob = await res.blob();
+            const file = new File([blob], asset.fileName, { type: asset.fileType });
+            return {
+              id: asset.id || Math.random().toString(36).substr(2, 9),
+              customName: asset.customName || asset.fileName,
+              file: file,
+              preview: URL.createObjectURL(file),
+              gridSpan: asset.gridSpan || { w: 1, h: 1 },
+              padding: asset.padding || { x: 0, y: 0 },
+              removeBg: asset.removeBg || false,
+              tolerance: asset.tolerance || 15,
+              cleanInnerWhites: asset.cleanInnerWhites || false
+            };
+          }));
+          
+          setAssets(restoredAssets);
+        } catch (error) {
+          console.error("Failed to load project:", error);
+          alert(t('invalidProject'));
+        }
+      };
+      reader.readAsText(projectFile);
+      return;
+    }
+
+    // Plain image uploads are normalized into the internal asset shape with sane defaults.
+    const imageFiles = acceptedFiles.filter(file => file.type.startsWith('image/'));
+    const newAssets = imageFiles.map(file => {
+      const lastDotIndex = file.name.lastIndexOf('.');
+      const customName = lastDotIndex !== -1 ? file.name.substring(0, lastDotIndex) : file.name;
+      
+      return {
+        id: Math.random().toString(36).substr(2, 9),
+        file,
+        customName,
+        preview: URL.createObjectURL(file),
+        gridSpan: { w: 1, h: 1 },
+        padding: { x: 0, y: 0 },
+        removeBg: true,
+        tolerance: 15,
+        cleanInnerWhites: false
+      };
+    });
+    setAssets(prev => [...prev, ...newAssets]);
+  }, [t]);
+
+  // react-dropzone handles click-to-upload and drag-and-drop with the same configuration.
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    accept: {
+      'image/png': ['.png'],
+      'image/jpeg': ['.jpg', '.jpeg'],
+      'application/json': ['.json', '.spack'],
+      'application/x-spritepacker': ['.spack']
+    }
+  });
+
+  // Small state updaters keep the JSX readable when editing per-asset options.
+  const removeAsset = (id) => {
+    setAssets(prev => prev.filter(a => a.id !== id));
+  };
+
+  const handleClearAll = () => {
+    if (assets.length === 0) return;
+    if (window.confirm(t('confirmClear'))) {
+      setAssets([]);
+    }
+  };
+
+  const updateAssetSetting = (id, setting, value) => {
+    setAssets(prev => prev.map(a => 
+      a.id === id ? { ...a, [setting]: value } : a
+    ));
+  };
+
+  const updateGridSpan = (id, axis, value) => {
+    setAssets(prev => prev.map(a => 
+      a.id === id ? { ...a, gridSpan: { ...a.gridSpan, [axis]: parseInt(value) || 1 } } : a
+    ));
+  };
+
+  const updatePadding = (id, axis, value) => {
+    setAssets(prev => prev.map(a => 
+      a.id === id ? { ...a, padding: { ...a.padding, [axis]: parseInt(value) || 0 } } : a
+    ));
+  };
+
+  // Trigger a browser download without leaving the page or needing a backend.
+  const downloadFile = (blob, fileName) => {
+    const link = document.createElement('a');
+    link.download = fileName;
+    link.href = URL.createObjectURL(blob);
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
+
+  const handleSaveProject = async () => {
+    try {
+      // Inline file data into the workspace export so projects are fully portable.
+      const serializedAssets = await Promise.all(
+        assets.map(async (asset) => {
+          return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+              resolve({
+                id: asset.id,
+                customName: asset.customName,
+                gridSpan: asset.gridSpan,
+                padding: asset.padding,
+                removeBg: asset.removeBg,
+                tolerance: asset.tolerance,
+                cleanInnerWhites: asset.cleanInnerWhites,
+                fileName: asset.file.name,
+                fileType: asset.file.type,
+                base64Data: reader.result
+              });
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(asset.file);
+          });
+        })
+      );
+
+      const projectData = {
+        version: 1,
+        packageName,
+        baseResolution,
+        customGridW,
+        customGridH,
+        generateOutlines,
+        assets: serializedAssets
+      };
+
+      const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(projectData));
+      const downloadAnchorNode = document.createElement('a');
+      downloadAnchorNode.setAttribute("href", dataStr);
+      downloadAnchorNode.setAttribute("download", `${packageName}_workspace.spack`);
+      document.body.appendChild(downloadAnchorNode);
+      downloadAnchorNode.click();
+      downloadAnchorNode.remove();
+    } catch (error) {
+      console.error('Failed to save project:', error);
+      alert(t('failedToSave'));
+    }
+  };
+
+  const handleConfirmDownload = () => {
+    // The preview modal batches every generated artifact into one confirmation step.
+    if (!previewData) return;
+
+    downloadFile(previewData.mainImage, `${packageName}.png`);
+    
+    const tsxBlob = new Blob([previewData.tsxContent], { type: 'text/xml' });
+    downloadFile(tsxBlob, `${packageName}.tsx`);
+
+    if (previewData.outlinesImage) {
+      downloadFile(previewData.outlinesImage, `${packageName}_outlines.png`);
+    }
+
+    setIsPreviewOpen(false);
+    setPreviewData(null);
+  };
+
+  const handleGenerate = async () => {
+    if (assets.length === 0) return;
+    setIsGenerating(true);
+    
+    // Custom mode allows non-square cells while presets stay square.
+    const activeGridW = baseResolution === 'custom' 
+      ? (parseInt(customGridW, 10) || 32) 
+      : (parseInt(baseResolution, 10) || 32);
+    const activeGridH = baseResolution === 'custom' 
+      ? (parseInt(customGridH, 10) || 32) 
+      : (parseInt(baseResolution, 10) || 32);
+
+    try {
+      const { canvas, packing } = await generateSpriteSheet(assets, { w: activeGridW, h: activeGridH }, { generateOutlines });
+      
+      const mainImageBlob = await new Promise(resolve => canvas.toBlob(resolve));
+      
+      // TSX metadata lets Tiled consume the exported sheet without extra manual setup.
+      const tileCount = packing.placements.length;
+      const columns = Math.floor(packing.width / activeGridW);
+      const tsxContent = `<?xml version="1.0" encoding="UTF-8"?>\n<tileset version="1.10" tiledversion="1.10.2" name="${packageName}" tilewidth="${activeGridW}" tileheight="${activeGridH}" tilecount="${tileCount}" columns="${columns}">\n  <image source="${packageName}.png" width="${packing.width}" height="${packing.height}"/>\n</tileset>`;
+
+      let outlinesImageBlob = null;
+      if (generateOutlines) {
+        const outlineCanvas = generateHoverOutlines(canvas);
+        outlinesImageBlob = await new Promise(resolve => outlineCanvas.toBlob(resolve));
+      }
+
+      setPreviewData({
+        mainImage: mainImageBlob,
+        outlinesImage: outlinesImageBlob,
+        tsxContent,
+        previewUrl: URL.createObjectURL(mainImageBlob)
+      });
+      setIsPreviewOpen(true);
+
+    } catch (error) {
+      console.error(t('generationFailed'), error);
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  // Reuse the same glassmorphism tokens across panels and modals for visual consistency.
+  const liquidGlassClass = "backdrop-blur-3xl bg-white/75 dark:bg-gray-950/40 border border-slate-200/80 dark:border-white/10 shadow-[0_25px_50px_-12px_rgba(15,23,42,0.18),_inset_0_1px_1px_rgba(255,255,255,0.7)] dark:shadow-[0_25px_50px_-12px_rgba(0,0,0,0.5),_inset_0_1px_1px_rgba(255,255,255,0.1)] transition-all duration-500";
+  const nestedGlassClass = "bg-white/80 dark:bg-white/5 border border-slate-200/80 dark:border-white/10 shadow-[inset_0_1px_1px_rgba(255,255,255,0.45)] dark:shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)] rounded-2xl transition-all duration-300";
+
+  return (
+    <div className="min-h-screen bg-gray-100 dark:bg-gray-950 text-gray-900 dark:text-gray-100 transition-colors duration-500 antialiased selection:bg-indigo-500/30">
+      {/* Background accents for depth */}
+      <div className="fixed inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-indigo-600/20 rounded-full blur-[120px] animate-pulse" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-purple-600/20 rounded-full blur-[120px] animate-pulse" style={{ animationDelay: '2s' }} />
+      </div>
+
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8 relative z-10">
+        
+        {/* Liquid Glass Header */}
+        <header className={`sticky top-4 z-40 flex flex-col md:flex-row md:items-center justify-between gap-6 p-6 rounded-[2.5rem] ${liquidGlassClass}`}>
+          <div className="flex items-center gap-4">
+            <div className="p-1 rounded-2xl">
+              <img src={pixelBindLogo} alt="PixelBind logo" className="w-10 h-10 object-contain image-pixelated drop-shadow-[0_8px_16px_rgba(15,23,42,0.18)]" />
+            </div>
+            <div>
+              <div className="flex items-center gap-3">
+                <h1 className="text-2xl font-black tracking-tight text-gray-900 dark:text-white drop-shadow-sm">{t('title')}</h1>
+                <div className="flex items-center gap-1.5">
+                  {activeView === 'generator' ? (
+                    <>
+                      <button 
+                        onClick={() => setIsModalOpen(true)}
+                        className="p-1.5 text-gray-400 hover:text-indigo-500 hover:bg-white/10 rounded-full transition-all"
+                        title={t('howToUse')}
+                      >
+                        <HelpCircle className="w-5 h-5" />
+                      </button>
+                      <button 
+                        onClick={() => setIsPromptModalOpen(true)}
+                        className="flex items-center gap-2 px-3 py-1.5 text-xs font-black text-purple-700 dark:text-purple-400 hover:text-purple-800 dark:hover:text-purple-300 bg-purple-500/10 hover:bg-purple-500/20 border border-purple-500/20 rounded-full transition-all animate-pulse shadow-[0_0_15px_rgba(168,85,247,0.2)]"
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        {t('promptIdeas')}
+                      </button>
+                      <button
+                        onClick={openContactPage}
+                        className="flex items-center gap-2 px-3 py-1.5 text-xs font-black text-cyan-700 dark:text-cyan-400 hover:text-cyan-800 dark:hover:text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/20 rounded-full transition-all shadow-[0_0_15px_rgba(34,211,238,0.15)]"
+                      >
+                        <Mail className="w-3.5 h-3.5" />
+                        {t('contactButton')}
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      onClick={openGeneratorPage}
+                      className="flex items-center gap-2 px-3 py-1.5 text-xs font-black text-indigo-700 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/20 rounded-full transition-all shadow-[0_0_15px_rgba(79,70,229,0.12)]"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" />
+                      {t('contactBack')}
+                    </button>
+                  )}
+                </div>
+              </div>
+              <p className="text-sm text-gray-500 dark:text-gray-400 font-bold tracking-tight">{t('description')}</p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-6">
+            {activeView === 'generator' && (
+              <>
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">{t('packageName')}</label>
+                  <input 
+                    type="text" 
+                    value={packageName}
+                    onChange={(e) => setPackageName(e.target.value)}
+                    className="bg-white/10 dark:bg-black/20 border border-white/10 rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all w-48 font-bold text-gray-800 dark:text-white"
+                    placeholder={t('packNamePlaceholder')}
+                  />
+                </div>
+
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-[10px] font-black uppercase tracking-widest text-gray-400 dark:text-gray-500">{t('baseGrid')}</label>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={baseResolution}
+                      onChange={(e) => setBaseResolution(e.target.value === 'custom' ? 'custom' : Number(e.target.value))}
+                      className="bg-white dark:bg-black/20 border border-white/10 rounded-xl px-4 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all cursor-pointer font-bold text-gray-900 dark:text-white"
+                    >
+                      {GRID_RESOLUTIONS.map(res => (
+                        <option key={res} value={res} className="bg-white text-gray-900 dark:bg-gray-900 dark:text-white">{res}x{res}</option>
+                      ))}
+                      <option value="custom" className="bg-white text-gray-900 dark:bg-gray-900 dark:text-white">{t('custom')}</option>
+                    </select>
+                    {baseResolution === 'custom' && (
+                      <div className="flex items-center gap-1 animate-in fade-in zoom-in duration-300">
+                        <div className="relative flex items-center">
+                          <input 
+                            type="number"
+                            value={customGridW}
+                            onChange={(e) => setCustomGridW(parseInt(e.target.value) || '')}
+                            className="bg-white/10 dark:bg-black/20 border border-white/10 rounded-xl pl-2 pr-2 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all w-20 font-bold text-gray-800 dark:text-white text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            min="1"
+                            placeholder="W"
+                          />
+                          <span className="absolute right-1.5 top-1 text-[7px] font-black text-gray-500 uppercase pointer-events-none">w</span>
+                        </div>
+                        <span className="text-gray-500 font-black text-xs px-1">×</span>
+                        <div className="relative flex items-center">
+                          <input 
+                            type="number"
+                            value={customGridH}
+                            onChange={(e) => setCustomGridH(parseInt(e.target.value) || '')}
+                            className="bg-white/10 dark:bg-black/20 border border-white/10 rounded-xl pl-2 pr-2 py-2 text-sm focus:ring-2 focus:ring-indigo-500 outline-none transition-all w-20 font-bold text-gray-800 dark:text-white text-center [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            min="1"
+                            placeholder="H"
+                          />
+                          <span className="absolute right-1.5 top-1 text-[7px] font-black text-gray-500 uppercase pointer-events-none">h</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+            <div className={`flex items-center gap-3 ${activeView === 'generator' ? 'pl-4 border-l border-white/10' : ''}`}>
+              <LanguageToggle />
+              <ThemeToggle />
+            </div>
+          </div>
+        </header>
+
+        {activeView === 'contact' ? (
+          <ContactPage onBack={openGeneratorPage} contactEmail={CONTACT_EMAIL} />
+        ) : (
+        <main className="grid grid-cols-1 lg:grid-cols-3 gap-8 pb-12">
+          
+          <div className="lg:col-span-2 space-y-6">
+            {/* Liquid Glass Dropzone */}
+            <div 
+              {...getRootProps()} 
+              className={`
+                relative cursor-pointer group
+                border-2 border-dashed rounded-[3rem] p-16 transition-all duration-700
+                flex flex-col items-center justify-center gap-6
+                ${isDragActive 
+                  ? 'border-indigo-500 bg-indigo-500/10 ring-8 ring-indigo-500/5' 
+                  : `border-white/10 hover:border-indigo-500/50 ${liquidGlassClass}`}
+              `}
+            >
+              <input {...getInputProps()} />
+              <div className={`p-8 rounded-[2rem] transition-all duration-700 shadow-2xl ${isDragActive ? 'bg-indigo-600 text-white scale-110' : 'bg-white/10 dark:bg-black/20 text-gray-400 group-hover:text-indigo-400 group-hover:scale-105 group-hover:shadow-[0_0_30px_rgba(79,70,229,0.3)]'}`}>
+                <Upload className="w-12 h-12" />
+              </div>
+              <div className="text-center space-y-2">
+                <p className="text-2xl font-black text-gray-900 dark:text-white tracking-tight">
+                  {isDragActive ? t('dropActive') : t('dropInactive')}
+                </p>
+                <p className="text-sm text-gray-500 dark:text-gray-400 font-black tracking-widest uppercase">{t('dropSupport')}</p>
+              </div>
+            </div>
+
+            {/* Asset Tiles */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+              {assets.map((asset) => (
+                <div key={asset.id} className={`rounded-[2rem] p-6 flex flex-col gap-6 group ${liquidGlassClass} hover:translate-y-[-4px] hover:shadow-[0_30px_60px_-15px_rgba(0,0,0,0.6)]`}>
+                  <div className="flex gap-4 items-center">
+                    <div className="relative w-24 h-24 bg-black/30 rounded-2xl overflow-hidden flex items-center justify-center border border-white/10 group-hover:border-indigo-500/40 transition-colors shadow-inner">
+                      <img src={asset.preview} alt="preview" className="max-w-full max-h-full object-contain image-pixelated p-2 drop-shadow-[0_0_8px_rgba(255,255,255,0.2)]" />
+                    </div>
+                    
+                    <div className="flex-1 space-y-3 min-w-0">
+                      <input 
+                        type="text"
+                        value={asset.customName}
+                        onChange={(e) => updateAssetSetting(asset.id, 'customName', e.target.value)}
+                        className="text-sm font-black text-gray-900 dark:text-white bg-transparent border border-transparent hover:bg-white/10 hover:border-white/10 focus:bg-black/20 focus:border-indigo-500 rounded-lg px-2 py-1 -ml-2 outline-none w-full truncate transition-all shadow-none"
+                        title={t('renameAsset')}
+                      />
+                      <div className="flex flex-wrap items-center gap-2">
+                        {['W', 'H'].map((dim, i) => (
+                          <div key={dim} className="flex items-center gap-1.5 bg-white/70 dark:bg-black/20 rounded-lg px-2 py-1.5 border border-slate-200/80 dark:border-white/5">
+                            <span className="text-[10px] font-black text-gray-500">{dim}</span>
+                            <input 
+                              type="number" 
+                              min="1"
+                              value={i === 0 ? asset.gridSpan.w : asset.gridSpan.h}
+                              onChange={(e) => i === 0 ? updateGridSpan(asset.id, 'w', e.target.value) : updateGridSpan(asset.id, 'h', e.target.value)}
+                              className="w-8 bg-transparent text-xs font-bold outline-none text-gray-800 dark:text-white"
+                            />
+                          </div>
+                        ))}
+                        {['PX', 'PY'].map((pad, i) => (
+                          <div key={pad} className="flex items-center gap-1.5 bg-indigo-500/10 border border-indigo-500/20 rounded-lg px-2 py-1.5 shadow-[0_0_10px_rgba(79,70,229,0.1)]">
+                            <span className="text-[10px] font-black text-indigo-400">{pad}</span>
+                            <input 
+                              type="number" 
+                              value={i === 0 ? asset.padding.x : asset.padding.y}
+                              onChange={(e) => i === 0 ? updatePadding(asset.id, 'x', e.target.value) : updatePadding(asset.id, 'y', e.target.value)}
+                              className="w-8 bg-transparent text-xs font-bold outline-none text-indigo-700 dark:text-indigo-300"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <button 
+                      onClick={() => removeAsset(asset.id)}
+                      className="p-2.5 text-gray-500 hover:text-red-400 hover:bg-red-500/10 rounded-xl transition-all self-start shadow-sm"
+                    >
+                      <Trash2 className="w-5 h-5" />
+                    </button>
+                  </div>
+
+                  <div className="pt-5 border-t border-white/10 flex flex-col gap-4">
+                    <label className="flex items-center justify-between cursor-pointer group">
+                      <span className="text-[10px] font-black text-gray-500 dark:text-gray-400 uppercase tracking-[0.2em]">{t('clearBg')}</span>
+                      <div className="relative flex items-center">
+                        <input 
+                          type="checkbox" 
+                          checked={asset.removeBg}
+                          onChange={(e) => updateAssetSetting(asset.id, 'removeBg', e.target.checked)}
+                          className="sr-only peer"
+                        />
+                        <div className="w-12 h-6 bg-black/30 rounded-full peer peer-checked:bg-indigo-600 transition-all ring-1 ring-white/10"></div>
+                        <div className="absolute left-1 top-1 w-4 h-4 bg-white rounded-full peer-checked:translate-x-6 transition-all shadow-md"></div>
+                      </div>
+                    </label>
+
+                    {asset.removeBg && (
+                      <div className="flex flex-col gap-4 animate-in slide-in-from-top-2 duration-500">
+                        <div className="flex items-center gap-4">
+                          <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">{t('tolerance')} {asset.tolerance}</span>
+                          <input 
+                            type="range" 
+                            min="0" 
+                            max="100" 
+                            value={asset.tolerance} 
+                            onChange={(e) => updateAssetSetting(asset.id, 'tolerance', parseInt(e.target.value))}
+                            className="flex-1 h-1.5 bg-black/30 rounded-full appearance-none cursor-pointer accent-indigo-500 ring-1 ring-white/5"
+                          />
+                        </div>
+                        
+                        <label className="flex items-center justify-between cursor-pointer group/toggle" title={t('cleanWhitesTooltip')}>
+                          <div className="flex flex-col">
+                            <span className="text-[10px] font-black text-gray-500 dark:text-gray-400 uppercase tracking-[0.2em]">{t('cleanInnerWhites')}</span>
+                            <span className="text-[8px] font-bold text-gray-600 dark:text-gray-500 uppercase tracking-tight">{t('cleanWhitesTooltip')}</span>
+                          </div>
+                          <div className="relative flex items-center">
+                            <input 
+                              type="checkbox" 
+                              checked={asset.cleanInnerWhites}
+                              onChange={(e) => updateAssetSetting(asset.id, 'cleanInnerWhites', e.target.checked)}
+                              className="sr-only peer"
+                            />
+                            <div className="w-10 h-5 bg-black/30 rounded-full peer peer-checked:bg-indigo-600 transition-all ring-1 ring-white/10"></div>
+                            <div className="absolute left-1 top-1 w-3 h-3 bg-white rounded-full peer-checked:translate-x-5 transition-all shadow-md"></div>
+                          </div>
+                        </label>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-6 lg:sticky lg:top-36 self-start">
+            {/* Liquid Glass Configuration Panel */}
+            <div className={`rounded-[2.5rem] p-8 space-y-8 ${liquidGlassClass}`}>
+              <div className="flex items-center gap-3 border-b border-white/10 pb-6">
+                <div className="p-2.5 bg-indigo-500/10 rounded-xl shadow-inner border border-white/5">
+                  <Settings2 className="w-6 h-6 text-indigo-400 shadow-[0_0_10px_rgba(129,140,248,0.5)]" />
+                </div>
+                <h2 className="font-black text-2xl tracking-tight">{t('configuration')}</h2>
+              </div>
+
+              <div className="space-y-6">
+                <label className="flex items-center justify-between cursor-pointer group pb-4 border-b border-white/5">
+                  <span className="text-sm font-black text-gray-700 dark:text-gray-300 tracking-tight">{t('generateOutlines')}</span>
+                  <div className="relative flex items-center">
+                    <input 
+                      type="checkbox" 
+                      checked={generateOutlines}
+                      onChange={(e) => setGenerateOutlines(e.target.checked)}
+                      className="sr-only peer"
+                    />
+                    <div className="w-14 h-7 bg-black/30 rounded-full peer peer-checked:bg-indigo-600 transition-all ring-1 ring-white/10"></div>
+                    <div className="absolute left-1 top-1 w-5 h-5 bg-white rounded-full peer-checked:translate-x-7 transition-all shadow-xl"></div>
+                  </div>
+                </label>
+
+                <div className="p-6 bg-blue-500/5 border border-blue-500/20 rounded-[1.5rem] flex gap-4 shadow-inner backdrop-blur-sm">
+                  <Grid3X3 className="w-7 h-7 text-blue-400 shrink-0 mt-0.5" />
+                    <p className="text-xs text-blue-700 dark:text-blue-200 leading-relaxed font-bold tracking-tight">
+                    {t('logicInfo')}
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div className={`flex justify-between items-center px-5 py-4 ${nestedGlassClass} hover:bg-white/10 group`}>
+                  <div className="flex items-center gap-3">
+                    <span className="text-[10px] font-black text-gray-500 dark:text-gray-400 uppercase tracking-[0.2em]">{t('totalAssets')}</span>
+                    {assets.length > 0 && (
+                      <button 
+                        onClick={handleClearAll}
+                        className="p-1.5 text-red-500/70 hover:text-red-400 bg-red-500/5 hover:bg-red-500/10 border border-red-500/10 rounded-lg transition-all shadow-sm"
+                        title={t('clearAll')}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                  <span className="text-xl font-black text-indigo-400 drop-shadow-[0_0_10px_rgba(129,140,248,0.3)] group-hover:scale-110 transition-transform">{assets.length}</span>
+                </div>
+                <div className={`flex justify-between items-center px-5 py-4 ${nestedGlassClass} hover:bg-white/10 group`}>
+                  <span className="text-[10px] font-black text-gray-500 dark:text-gray-400 uppercase tracking-[0.2em]">{t('targetGrid')}</span>
+                  <span className="text-xl font-black text-indigo-400 drop-shadow-[0_0_10px_rgba(129,140,248,0.3)] group-hover:scale-110 transition-transform">
+                    {baseResolution === 'custom' 
+                      ? `${customGridW || 32}x${customGridH || 32}` 
+                      : `${baseResolution}x${baseResolution}`}
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-4 pt-2">
+                <button 
+                  onClick={handleSaveProject}
+                  className="py-4 bg-white/10 dark:bg-black/20 hover:bg-white/20 text-gray-700 dark:text-white text-sm font-black rounded-2xl flex items-center justify-center gap-2 transition-all shadow-lg active:scale-95 border border-white/5"
+                >
+                  <Save className="w-4 h-4 text-indigo-400" />
+                  {t('saveProject')}
+                </button>
+                <label className="cursor-pointer py-4 bg-white/10 dark:bg-black/20 hover:bg-white/20 text-gray-700 dark:text-white text-sm font-black rounded-2xl flex items-center justify-center gap-2 transition-all shadow-lg active:scale-95 text-center border border-white/5">
+                  <FolderOpen className="w-4 h-4 text-indigo-400" />
+                  {t('loadProject')}
+                  <input type="file" accept=".spack,.json" className="hidden" onChange={(e) => { if (e.target.files?.length) { onDrop(Array.from(e.target.files)); e.target.value = null; } }} />
+                </label>
+              </div>
+
+              <button 
+                onClick={handleGenerate}
+                disabled={assets.length === 0 || isGenerating}
+                className={`
+                  w-full py-6 rounded-[1.5rem] font-black text-xl flex items-center justify-center gap-3 transition-all duration-500 active:scale-[0.98]
+                  ${assets.length === 0 || isGenerating 
+                    ? 'bg-black/20 text-gray-600 cursor-not-allowed opacity-50' 
+                    : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-[0_20px_40px_rgba(79,70,229,0.3)] hover:-translate-y-1 ring-1 ring-white/20'}
+                `}
+              >
+                {isGenerating ? (
+                  <div className="w-8 h-8 border-4 border-white/30 border-t-white rounded-full animate-spin"></div>
+                ) : (
+                  <>
+                    <Download className="w-7 h-7" />
+                    {t('generateDownload')}
+                  </>
+                )}
+              </button>
+            </div>
+
+            {assets.length > 0 && (
+              <div className="flex items-center gap-3 text-xs text-indigo-400 justify-center font-black uppercase tracking-[0.25em] animate-pulse drop-shadow-[0_0_8px_rgba(129,140,248,0.5)]">
+                <CheckCircle2 className="w-4 h-4" />
+                {t('readyToGenerate')}
+              </div>
+            )}
+          </div>
+
+        </main>
+        )}
+      </div>
+      
+      {/* Liquid Glass Modal */}
+      {activeView === 'generator' && isModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 overflow-hidden">
+          <div className="absolute inset-0 bg-gray-950/80 backdrop-blur-2xl animate-in fade-in duration-700" onClick={() => setIsModalOpen(false)} />
+          <div className={`relative rounded-[3.5rem] w-full max-w-2xl overflow-hidden shadow-[0_50px_100px_-20px_rgba(0,0,0,0.8)] animate-in zoom-in-95 slide-in-from-bottom-20 duration-700 ${liquidGlassClass}`}>
+            <div className="flex items-center justify-between p-10 border-b border-slate-200/80 dark:border-white/10 bg-white/70 dark:bg-white/5">
+              <div className="flex items-center gap-4">
+                <div className="p-3 bg-indigo-600 rounded-2xl shadow-xl ring-1 ring-white/20">
+                  <HelpCircle className="w-8 h-8 text-white" />
+                </div>
+                <h2 className="text-3xl font-black text-gray-900 dark:text-white tracking-tight">{t('modalTitle')}</h2>
+              </div>
+              <button onClick={() => setIsModalOpen(false)} className="p-4 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 rounded-2xl transition-all"><X className="w-8 h-8" /></button>
+            </div>
+            
+            <div className="p-10 space-y-10 max-h-[60vh] overflow-y-auto custom-scrollbar">
+              <p className="text-xl text-gray-700 dark:text-gray-300 leading-relaxed font-bold tracking-tight">{t('modalSubtitle')}</p>
+              <div className="grid gap-10">
+                {[1,2,3,4,5,6].map((i) => (
+                  <div key={i} className="flex gap-8 group">
+                    <div className="flex-shrink-0 w-14 h-14 rounded-2xl bg-indigo-500/10 border border-white/10 flex items-center justify-center text-indigo-400 font-black text-2xl group-hover:bg-indigo-600 group-hover:text-white transition-all duration-500 shadow-inner">{i}</div>
+                    <div className="space-y-2">
+                      <h3 className="font-black text-xl text-gray-900 dark:text-white group-hover:text-indigo-500 dark:group-hover:text-indigo-400 transition-colors">{t(`step${i}Title`)}</h3>
+                      <p className="text-base text-gray-600 dark:text-gray-400 leading-relaxed font-bold">{t(`step${i}Text`)}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="p-10 bg-white/70 dark:bg-white/5 border-t border-slate-200/80 dark:border-white/10 flex justify-end">
+              <button onClick={() => setIsModalOpen(false)} className="px-10 py-5 bg-indigo-600 hover:bg-indigo-500 text-white font-black rounded-2xl transition-all shadow-[0_15px_30px_rgba(79,70,229,0.3)] hover:-translate-y-1 active:scale-95 ring-1 ring-white/20">{t('gotIt')}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Liquid Glass Preview Modal */}
+      {activeView === 'generator' && isPreviewOpen && previewData && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 overflow-hidden">
+          <div className="absolute inset-0 bg-gray-950/80 backdrop-blur-2xl animate-in fade-in duration-700" onClick={() => setIsPreviewOpen(false)} />
+          <div className={`relative rounded-[3.5rem] w-full max-w-4xl overflow-hidden shadow-[0_50px_100px_-20px_rgba(0,0,0,0.8)] animate-in zoom-in-95 slide-in-from-bottom-20 duration-700 ${liquidGlassClass}`}>
+            <div className="flex items-center justify-between p-10 border-b border-slate-200/80 dark:border-white/10 bg-white/70 dark:bg-white/5">
+              <div className="flex items-center gap-4">
+                <div className="p-3 bg-indigo-600 rounded-2xl shadow-xl ring-1 ring-white/20">
+                  <ImageIcon className="w-8 h-8 text-white" />
+                </div>
+                <h2 className="text-3xl font-black text-gray-900 dark:text-white tracking-tight">{t('previewTitle')}</h2>
+              </div>
+              <button onClick={() => setIsPreviewOpen(false)} className="p-4 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 rounded-2xl transition-all"><X className="w-8 h-8" /></button>
+            </div>
+            
+            <div className="p-10 flex flex-col items-center gap-8 overflow-hidden">
+              <div className="w-full relative rounded-3xl overflow-auto custom-scrollbar max-h-[60vh] border border-white/10 shadow-2xl bg-checkerboard">
+                <img 
+                  src={previewData.previewUrl} 
+                  alt="Sprite Sheet Preview" 
+                  className="max-w-none mx-auto image-pixelated shadow-2xl"
+                  style={{ display: 'block' }}
+                />
+              </div>
+              
+              <div className="flex gap-4 w-full">
+                <button 
+                  onClick={() => setIsPreviewOpen(false)} 
+                  className="flex-1 px-8 py-5 bg-white/70 dark:bg-white/5 hover:bg-white dark:hover:bg-white/10 text-gray-900 dark:text-white font-black rounded-2xl transition-all border border-slate-200/80 dark:border-white/10"
+                >
+                  {t('cancel')}
+                </button>
+                <button 
+                  onClick={handleConfirmDownload} 
+                  className="flex-[2] px-10 py-5 bg-indigo-600 hover:bg-indigo-500 text-white font-black rounded-2xl transition-all shadow-[0_15px_30px_rgba(79,70,229,0.3)] hover:-translate-y-1 active:scale-95 ring-1 ring-white/20 flex items-center justify-center gap-3"
+                >
+                  <Download className="w-6 h-6" />
+                  {t('confirmDownload')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Prompt Ideas Modal */}
+      {activeView === 'generator' && isPromptModalOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6 overflow-hidden">
+          <div className="absolute inset-0 bg-gray-950/80 backdrop-blur-2xl animate-in fade-in duration-700" onClick={() => { setIsPromptModalOpen(false); setSelectedPrompt(null); }} />
+          <div className={`relative rounded-[3.5rem] w-full max-w-2xl overflow-hidden shadow-[0_50px_100px_-20px_rgba(0,0,0,0.8)] animate-in zoom-in-95 slide-in-from-bottom-20 duration-700 ${liquidGlassClass}`}>
+            <div className="flex items-center justify-between p-8 border-b border-slate-200/80 dark:border-white/10 bg-white/70 dark:bg-white/5">
+              <div className="flex items-center gap-4">
+                <div className="p-2.5 bg-purple-600 rounded-2xl shadow-xl ring-1 ring-white/20">
+                  <Sparkles className="w-6 h-6 text-white" />
+                </div>
+                <h2 className="text-2xl font-black text-gray-900 dark:text-white tracking-tight">
+                  {selectedPrompt ? t('promptIdeas') : t('promptIdeas')}
+                </h2>
+              </div>
+              <div className="flex items-center gap-2">
+                {!selectedPrompt && (
+                  <button 
+                    onClick={() => setShowPromptGuide(!showPromptGuide)}
+                    className={`p-3 rounded-2xl transition-all flex items-center gap-2 text-sm font-black uppercase tracking-widest ${showPromptGuide ? 'bg-purple-500 text-white shadow-lg' : 'text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10'}`}
+                    title={t('howToUsePrompts')}
+                  >
+                    <Info className="w-5 h-5" />
+                  </button>
+                )}
+                {selectedPrompt && (
+                  <button 
+                    onClick={() => setSelectedPrompt(null)}
+                    className="p-3 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 rounded-2xl transition-all flex items-center gap-2 text-sm font-black uppercase tracking-widest"
+                  >
+                    <ChevronLeft className="w-5 h-5" />
+                    {t('back')}
+                  </button>
+                )}
+                <button onClick={() => { setIsPromptModalOpen(false); setSelectedPrompt(null); }} className="p-3 text-gray-500 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-black/5 dark:hover:bg-white/10 rounded-2xl transition-all"><X className="w-6 h-6" /></button>
+              </div>
+            </div>
+            
+            <div className="p-8 max-h-[60vh] overflow-y-auto custom-scrollbar">
+              {isLoadingPrompts ? (
+                <div className="flex flex-col items-center justify-center py-20 gap-4">
+                  <div className="w-10 h-10 border-4 border-purple-500/30 border-t-purple-500 rounded-full animate-spin"></div>
+                  <p className="text-sm font-black text-purple-700 dark:text-purple-400 uppercase tracking-widest animate-pulse">{t('loading')}</p>
+                </div>
+              ) : selectedPrompt ? (
+                <div className="space-y-8 animate-in fade-in slide-in-from-right-4 duration-500">
+                  <div className="space-y-2">
+                    <h3 className="text-xl font-black text-gray-900 dark:text-white">{selectedPrompt.title}</h3>
+                    <div className="p-6 bg-white/80 dark:bg-black/40 border border-slate-200/80 dark:border-white/10 rounded-3xl font-mono text-sm leading-relaxed text-gray-700 dark:text-gray-300 shadow-inner break-words">
+                      {selectedPrompt.prompt}
+                    </div>
+                  </div>
+                  
+                  <button 
+                    onClick={() => handleCopyPrompt(selectedPrompt.prompt)}
+                    className={`
+                      w-full py-5 rounded-2xl font-black text-lg flex items-center justify-center gap-3 transition-all duration-300
+                      ${isCopied 
+                        ? 'bg-green-600 text-white shadow-[0_0_30px_rgba(22,163,74,0.4)] scale-[0.98]' 
+                        : 'bg-white/80 dark:bg-white/10 hover:bg-white dark:hover:bg-white/20 text-gray-900 dark:text-white border border-slate-200/80 dark:border-white/10 shadow-lg'}
+                    `}
+                  >
+                    {isCopied ? (
+                      <>
+                        <Check className="w-6 h-6" />
+                        {t('copied')}
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-6 h-6 text-purple-400" />
+                        {t('copy')}
+                      </>
+                    )}
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-6 animate-in fade-in slide-in-from-left-4 duration-500">
+                  {showPromptGuide && (
+                    <div className={`p-8 rounded-[2.5rem] space-y-8 animate-in fade-in zoom-in-95 duration-500 ${nestedGlassClass}`}>
+                      <div className="flex items-center gap-4">
+                        <div className="p-3 bg-indigo-500/20 rounded-2xl">
+                          <Lightbulb className="w-6 h-6 text-indigo-400" />
+                        </div>
+                        <h3 className="text-2xl font-black text-gray-900 dark:text-white">{t('howToUsePrompts')}</h3>
+                      </div>
+                      
+                      <p className="text-gray-700 dark:text-gray-300 font-bold leading-relaxed">{t('promptsIntro')}</p>
+                      
+                      <div className="p-6 bg-blue-500/10 border border-blue-500/20 rounded-3xl flex gap-4">
+                        <Info className="w-6 h-6 text-blue-400 shrink-0" />
+                        <p className="text-sm text-blue-700 dark:text-blue-200 leading-relaxed font-bold italic">{t('promptsRecommendation')}</p>
+                      </div>
+
+                      <div className="space-y-6">
+                        <div className="flex items-center gap-3">
+                          <ListOrdered className="w-5 h-5 text-indigo-400" />
+                          <h4 className="font-black text-gray-900 dark:text-white uppercase tracking-widest text-xs">{t('configuration')}</h4>
+                        </div>
+                        <div className="grid gap-6">
+                          {[1,2,3,4,5,6].map(i => (
+                            <div key={i} className="flex gap-4 group">
+                              <div className="w-8 h-8 rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-xs font-black text-indigo-400 shrink-0 group-hover:bg-indigo-600 group-hover:text-white transition-all">{i}</div>
+                              <div className="space-y-1">
+                                <p className="font-black text-sm text-gray-900 dark:text-white group-hover:text-indigo-500 dark:group-hover:text-indigo-400 transition-colors">{t(`promptStep${i}Title`)}</p>
+                                <p className="text-xs text-gray-600 dark:text-gray-500 font-bold leading-relaxed">{t(`promptStep${i}Text`)}</p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="p-6 bg-amber-500/10 border border-amber-500/20 rounded-3xl space-y-4">
+                        <div className="flex items-center gap-3">
+                          <AlertTriangle className="w-5 h-5 text-amber-500" />
+                          <h4 className="font-black text-amber-500 uppercase tracking-[0.2em] text-[10px]">{t('importantNotes')}</h4>
+                        </div>
+                        <ul className="space-y-3">
+                          {[1,2,3].map(i => (
+                            <li key={i} className="flex gap-3 text-xs text-amber-800 dark:text-amber-200/80 font-bold leading-relaxed">
+                              <span className="w-1 h-1 bg-amber-500 rounded-full shrink-0 mt-1.5" />
+                              {t(`note${i}`)}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="grid gap-4">
+                    {promptsData.map((item, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => setSelectedPrompt(item)}
+                        className="flex items-center justify-between p-5 bg-white/80 dark:bg-white/5 hover:bg-purple-500/10 border border-slate-200/80 dark:border-white/10 hover:border-purple-500/30 rounded-3xl transition-all group text-left"
+                      >
+                        <span className="font-black text-gray-800 dark:text-gray-200 group-hover:text-purple-600 dark:group-hover:text-purple-400 transition-colors">{item.title}</span>
+                        <ChevronLeft className="w-5 h-5 text-gray-500 group-hover:text-purple-600 dark:group-hover:text-purple-400 transition-all rotate-180" />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Footer */}
+      <footer className="w-full py-16 text-center mt-12 border-t border-slate-200/80 dark:border-white/10 relative z-10 bg-white/40 dark:bg-black/20 backdrop-blur-md">
+        <div className="flex flex-col items-center gap-6 px-4">
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <button
+              onClick={activeView === 'contact' ? openGeneratorPage : openContactPage}
+              className="inline-flex items-center gap-3 px-5 py-3 text-xs font-black uppercase tracking-[0.25em] text-cyan-700 dark:text-cyan-300 bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/20 rounded-full transition-all shadow-[0_0_20px_rgba(34,211,238,0.12)]"
+            >
+              <Mail className="w-4 h-4" />
+              {activeView === 'contact' ? t('contactBack') : t('contactButton')}
+            </button>
+            <a
+              href={REPO_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-3 px-5 py-3 text-xs font-black uppercase tracking-[0.25em] text-amber-700 dark:text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/20 rounded-full transition-all shadow-[0_0_20px_rgba(245,158,11,0.12)]"
+            >
+              <Github className="w-4 h-4" />
+              <Star className="w-4 h-4" />
+              {t('starOnGithub')}
+            </a>
+          </div>
+          <div className="inline-flex flex-wrap items-center justify-center gap-4 text-[10px] text-gray-500 font-black tracking-[0.4em] uppercase">
+            <span className="drop-shadow-sm">{t('developedBy')}</span>
+            <span className="w-1.5 h-1.5 bg-gray-700 rounded-full shadow-inner" />
+            <div className="flex items-center gap-2 text-indigo-400 drop-shadow-[0_0_8px_rgba(129,140,248,0.4)]">
+              <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24"><path d="M12,2L14.5,9.5L22,12L14.5,14.5L12,22L9.5,14.5L2,12L9.5,9.5L12,2Z" /></svg>
+              <span className="tracking-[0.5em]">Gemini</span>
+            </div>
+            <span className="w-1.5 h-1.5 bg-gray-700 rounded-full shadow-inner" />
+            <div className="flex items-center gap-2 text-cyan-600 dark:text-cyan-300 drop-shadow-[0_0_8px_rgba(34,211,238,0.25)]">
+              <span className="tracking-[0.4em]">{t('craftedWith')}</span>
+              <span className="tracking-[0.5em]">Codex</span>
+            </div>
+          </div>
+        </div>
+      </footer>
+
+      <style>{`
+        .image-pixelated { image-rendering: pixelated; image-rendering: crisp-edges; }
+        .custom-scrollbar::-webkit-scrollbar { width: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: rgba(0,0,0,0.2); border-radius: 10px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 10px; border: 2px solid transparent; background-clip: content-box; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); border-radius: 10px; border: 2px solid transparent; background-clip: content-box; }
+        .bg-checkerboard {
+          background-image: linear-gradient(45deg, #1a1a1a 25%, transparent 25%), 
+            linear-gradient(-45deg, #1a1a1a 25%, transparent 25%), 
+            linear-gradient(45deg, transparent 75%, #1a1a1a 75%), 
+            linear-gradient(-45deg, transparent 75%, #1a1a1a 75%);
+          background-size: 20px 20px;
+          background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+          background-color: #262626;
+        }
+      `}</style>
+    </div>
+  );
+}
