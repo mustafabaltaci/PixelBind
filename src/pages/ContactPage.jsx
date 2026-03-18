@@ -78,6 +78,7 @@ export default function ContactPage({ onBack, contactEmail }) {
   // Gate the form submit path until all required contact form values are present.
   const hasContactFormConfig = Object.values(contactFormConfig).every(Boolean);
   const mailtoHref = `mailto:${contactEmail}?subject=${encodeURIComponent('PixelBind Feedback')}`;
+  const formattedContactEmail = contactEmail.replace(/([@.])/g, '$1\u200b');
   const categoryOptions = [
     {
       value: 'suggestion',
@@ -241,8 +242,8 @@ export default function ContactPage({ onBack, contactEmail }) {
                 <p className="text-[11px] font-black uppercase tracking-[0.24em] text-gray-500 dark:text-gray-400">
                   {t('contactDirectTitle')}
                 </p>
-                <p className="text-lg font-black text-gray-900 dark:text-white break-all">
-                  {contactEmail}
+                <p className="max-w-full text-base sm:text-lg font-black leading-tight text-gray-900 dark:text-white break-words">
+                  {formattedContactEmail}
                 </p>
                 <p className="text-sm text-gray-500 dark:text-gray-400 font-bold leading-relaxed">
                   {t('contactDirectText')}
